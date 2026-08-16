@@ -104,10 +104,12 @@ async function renderSummaryPage(file) {
   // Second OCR pass: tightly crop the Question column, enlarge it, and remove
   // the alternating gray row background. No character whitelist is used, so
   // IDs containing letters, numbers, dashes, or other punctuation are allowed.
+  // Extend the crop far enough to include 23-row Verbal reports; shorter
+  // Quant and DI tables simply leave blank space at the bottom of the crop.
   const sourceX = Math.floor(pageCanvas.width * 0.10);
   const sourceY = Math.floor(pageCanvas.height * 0.105);
   const sourceW = Math.floor(pageCanvas.width * 0.155);
-  const sourceH = Math.floor(pageCanvas.height * 0.515);
+  const sourceH = Math.floor(pageCanvas.height * 0.59);
   const upscale = 2;
 
   const questionCanvas = document.createElement('canvas');
