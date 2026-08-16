@@ -1,13 +1,5 @@
 # GMAT Practice Report Parser
 
-## v1.1.1 OCR hotfix
-
-- Restores the primary summary OCR pass to the same settings used by v1.0.
-- Adds a fallback summary OCR pass only when the first pass misses question rows.
-- Keeps the high-resolution Question-column cross-check from v1.1.
-- Applies narrow `PS` numeric cleanup to the targeted pass without restricting other Question ID formats.
-
-
 A browser-based utility for GMAT timed-practice result PDFs.
 
 ## What it does
@@ -21,6 +13,8 @@ A browser-based utility for GMAT timed-practice result PDFs.
 - Supports 45:00 standard time, 67:30 time-and-a-half, and 90:00 double time.
 - Creates an mba.com-style pacing graph.
 - Outputs all IDs, incorrect IDs, and/or correct IDs with time greater than or equal to a chosen cutoff.
+- Uses a true **Include** checkbox for every extracted question: filters set the default, and you can manually add or exclude individual questions.
+- Preserves manual include/exclude overrides while filters or the time cutoff change, with a one-click reset back to the filter-generated selection.
 - Lets extracted Question IDs, results, and times be edited before copying.
 - Saves the pacing graph as a PNG.
 
@@ -53,3 +47,12 @@ http://localhost:8000
 5. Save.
 
 No build step is required.
+
+
+### OCR conflict behavior
+When the full-page OCR and the higher-resolution Question-column OCR disagree, the higher-resolution reading is selected by default. The row is still flagged for review, and the full-page reading remains available with a one-click switch.
+
+
+## v1.3 selection overrides
+
+The verification table now has a true **Include** checkbox. Current filters determine the default state, but checking or unchecking a row creates a persistent manual override. **Reset manual selections** clears all overrides and restores the current filter-generated selection.

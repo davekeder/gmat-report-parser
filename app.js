@@ -29,6 +29,7 @@ const el = {
   copyBtn: $('#copyBtn'),
   selectionCount: $('#selectionCount'),
   verificationBody: $('#verificationBody'),
+  resetSelectionsBtn: $('#resetSelectionsBtn'),
   ocrText: $('#ocrText'),
   questionOcrText: $('#questionOcrText'),
 };
@@ -268,15 +269,73 @@ async function analyzePdf() {
   }
 }
 
+function getFilterMode() {
+  return document.querySelector('input[name="filterMode"]:checked')?.value || 'all';
+}
+
+function getCutoffSeconds() {
+  return parseTimeToSeconds(el.cutoffTime.value);
+}
+
+function isAutoSelected(question) {
+  const mode = getFilterMode();
+  if (mode === 'all') return true;
+
+  const cutoff = getCutoffSeconds();
+  const missed = el.includeIncorrect.checked && question.result === 'Incorrect';
+  const slowCorrect = el.includeSlowCorrect.checked
+    && question.result === 'Correct'
+    && cutoff !== null
+    && question.seconds >= cutoff;
+  return missed || slowCorrect;
+}
+
+function isFinallySelected(question) {
+  return question.manualOverride === null || question.manualOverride === undefined
+    ? isAutoSelected(question)
+    : question.manualOverride;
+}
+
+function applyRowSelectionState(row, question) {
+  const checkbox = row.querySelector('.include-checkbox');
+  const autoSelected = isAutoSelected(question);
+  const finalSelected = isFinallySelected(question);
+  const hasOverride = question.manualOverride !== null && question.manualOverride !== undefined;
+
+  if (checkbox) {
+    checkbox.checked = finalSelected;
+    checkbox.title = hasOverride
+      ? `Manual override: ${finalSelected ? 'included' : 'excluded'}. Current filters would ${autoSelected ? 'include' : 'exclude'} this question.`
+      : `Selected by current filters: ${autoSelected ? 'yes' : 'no'}`;
+    checkbox.setAttribute('aria-label', `${finalSelected ? 'Include' : 'Exclude'} question ${question.number} in problem ID string`);
+  }
+
+  row.classList.toggle('row-manual-include', hasOverride && finalSelected);
+  row.classList.toggle('row-manual-exclude', hasOverride && !finalSelected);
+}
+
+function refreshSelectionCheckboxes() {
+  [...el.verificationBody.querySelectorAll('tr')].forEach((row, index) => {
+    const question = state.questions[index];
+    if (question) applyRowSelectionState(row, question);
+  });
+
+  const overrideCount = state.questions.filter((q) => q.manualOverride !== null && q.manualOverride !== undefined).length;
+  el.resetSelectionsBtn.disabled = overrideCount === 0;
+}
+
 function renderVerificationTable() {
   el.verificationBody.innerHTML = '';
 
   state.questions.forEach((question, index) => {
+    if (question.manualOverride === undefined) question.manualOverride = null;
+
     const row = document.createElement('tr');
     row.className = `${question.result === 'Correct' ? 'row-correct' : 'row-incorrect'}${question.ocrCheck?.status === 'review' ? ' row-review' : ''}`;
     const ocrCheckHtml = buildOcrCheckHtml(question, index);
     row.innerHTML = `
       <td>${index + 1}</td>
+      <td class="include-cell"><input class="include-checkbox" type="checkbox" aria-label="Include question ${index + 1} in problem ID string" /></td>
       <td class="id-cell"><input class="table-input id-editor" value="${escapeHtml(question.id)}" aria-label="Question ${index + 1} ID" /></td>
       <td class="ocr-check-cell">${ocrCheckHtml}</td>
       <td class="result-cell">
@@ -288,9 +347,20 @@ function renderVerificationTable() {
       <td class="time-cell"><input class="table-input time-editor" value="${formatTime(question.seconds)}" inputmode="numeric" aria-label="Question ${index + 1} time" /></td>
     `;
 
+    const includeCheckbox = row.querySelector('.include-checkbox');
     const idEditor = row.querySelector('.id-editor');
     const resultEditor = row.querySelector('.result-editor');
     const timeEditor = row.querySelector('.time-editor');
+
+    includeCheckbox.addEventListener('change', () => {
+      const autoSelected = isAutoSelected(question);
+      question.manualOverride = includeCheckbox.checked === autoSelected
+        ? null
+        : includeCheckbox.checked;
+      applyRowSelectionState(row, question);
+      refreshOutput();
+      refreshSelectionCheckboxes();
+    });
 
     idEditor.addEventListener('change', () => {
       question.id = idEditor.value.trim().toUpperCase();
@@ -307,7 +377,8 @@ function renderVerificationTable() {
 
     resultEditor.addEventListener('change', () => {
       question.result = resultEditor.value;
-      row.className = `${question.result === 'Correct' ? 'row-correct' : 'row-incorrect'}${question.ocrCheck?.status === 'review' ? ' row-review' : ''}`;
+      row.classList.toggle('row-correct', question.result === 'Correct');
+      row.classList.toggle('row-incorrect', question.result === 'Incorrect');
       refreshEverything();
     });
 
@@ -327,7 +398,10 @@ function renderVerificationTable() {
 
     attachOcrSuggestionHandler(row, question);
     el.verificationBody.appendChild(row);
+    applyRowSelectionState(row, question);
   });
+
+  refreshSelectionCheckboxes();
 }
 
 function buildOcrCheckHtml(question, index) {
@@ -393,29 +467,42 @@ function refreshStats() {
 }
 
 function refreshFilterUi() {
-  const mode = document.querySelector('input[name="filterMode"]:checked')?.value || 'all';
+  const mode = getFilterMode();
   el.selectedFilters.classList.toggle('is-disabled', mode !== 'selected');
+  refreshSelectionCheckboxes();
 }
 
 function getFilteredQuestions() {
-  const mode = document.querySelector('input[name="filterMode"]:checked')?.value || 'all';
-  if (mode === 'all') return [...state.questions];
-
-  const cutoff = parseTimeToSeconds(el.cutoffTime.value);
-  return state.questions.filter((q) => {
-    const missed = el.includeIncorrect.checked && q.result === 'Incorrect';
-    const slowCorrect = el.includeSlowCorrect.checked
-      && q.result === 'Correct'
-      && cutoff !== null
-      && q.seconds >= cutoff;
-    return missed || slowCorrect;
-  });
+  return state.questions.filter(isFinallySelected);
 }
 
 function refreshOutput() {
   const selected = getFilteredQuestions();
   el.idOutput.value = selected.map((q) => q.id).join(', ');
-  el.selectionCount.textContent = `${selected.length} problem${selected.length === 1 ? '' : 's'}`;
+
+  let addedCount = 0;
+  let excludedCount = 0;
+  state.questions.forEach((q) => {
+    if (q.manualOverride === null || q.manualOverride === undefined) return;
+    const autoSelected = isAutoSelected(q);
+    if (q.manualOverride && !autoSelected) addedCount += 1;
+    if (!q.manualOverride && autoSelected) excludedCount += 1;
+  });
+
+  const base = `${selected.length} problem${selected.length === 1 ? '' : 's'}`;
+  const adjustments = [];
+  if (addedCount) adjustments.push(`${addedCount} manually added`);
+  if (excludedCount) adjustments.push(`${excludedCount} manually excluded`);
+  el.selectionCount.textContent = adjustments.length
+    ? `${base} (${adjustments.join(', ')})`
+    : base;
+
+  refreshSelectionCheckboxes();
+}
+
+function resetManualSelections() {
+  state.questions.forEach((q) => { q.manualOverride = null; });
+  refreshOutput();
 }
 
 const chartMarksPlugin = {
@@ -634,6 +721,7 @@ el.analyzeBtn.addEventListener('click', analyzePdf);
 el.timingMode.addEventListener('change', refreshEverything);
 el.copyBtn.addEventListener('click', copyIds);
 el.saveChartBtn.addEventListener('click', saveChart);
+el.resetSelectionsBtn.addEventListener('click', resetManualSelections);
 
 document.querySelectorAll('input[name="filterMode"]').forEach((radio) => {
   radio.addEventListener('change', () => { refreshFilterUi(); refreshOutput(); });

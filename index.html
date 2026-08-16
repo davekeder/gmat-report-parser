@@ -90,7 +90,7 @@
         <div class="section-heading">
           <div>
             <h2 id="filter-heading">4. Build problem ID string</h2>
-            <p>The output uses the exact Question IDs shown in the verification table below.</p>
+            <p>The filters create the default selection. Use the Include checkboxes in the verification table to add or remove individual questions.</p>
           </div>
         </div>
 
@@ -132,13 +132,14 @@
         <div class="section-heading">
           <div>
             <h2 id="verify-heading">5. Verify extracted data</h2>
-            <p>Question IDs are read twice. Any disagreement is highlighted; result and time can also be edited if needed.</p>
+            <p>Question IDs are read twice. Any disagreement is highlighted; result and time can be edited. Include reflects the current filters, but you can check or uncheck any individual question as a manual override.</p>
           </div>
+          <button id="resetSelectionsBtn" class="secondary-btn" type="button" disabled>Reset manual selections</button>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>#</th><th>Question</th><th>OCR check</th><th>Result</th><th>Time</th></tr>
+              <tr><th>#</th><th>Include</th><th>Question</th><th>OCR check</th><th>Result</th><th>Time</th></tr>
             </thead>
             <tbody id="verificationBody"></tbody>
           </table>
