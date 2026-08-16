@@ -132,20 +132,24 @@
         <div class="section-heading">
           <div>
             <h2 id="verify-heading">5. Verify extracted data</h2>
-            <p>OCR is usually accurate, but question IDs, result, and time can be edited if needed.</p>
+            <p>Question IDs are read twice. Any disagreement is highlighted; result and time can also be edited if needed.</p>
           </div>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>#</th><th>Question</th><th>Result</th><th>Time</th></tr>
+              <tr><th>#</th><th>Question</th><th>OCR check</th><th>Result</th><th>Time</th></tr>
             </thead>
             <tbody id="verificationBody"></tbody>
           </table>
         </div>
         <details class="ocr-details">
-          <summary>Show raw OCR text</summary>
+          <summary>Show full-page OCR text</summary>
           <pre id="ocrText"></pre>
+        </details>
+        <details class="ocr-details">
+          <summary>Show targeted Question-column OCR text</summary>
+          <pre id="questionOcrText"></pre>
         </details>
       </section>
     </section>

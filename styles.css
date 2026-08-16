@@ -196,3 +196,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .output-actions { flex-direction: row; align-items: center; }
   .output-actions .primary-btn { width: auto; }
 }
+
+/* OCR cross-check */
+.ocr-check-cell { min-width: 220px; }
+.ocr-review-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.ocr-badge { display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.ocr-badge.match { color: #315d0b; background: #eff8e7; border: 1px solid #cfe3be; }
+.ocr-badge.review { color: #754f00; background: #fff1c7; border: 1px solid #e6c55e; }
+.ocr-badge.single { color: #59616a; background: #f0f2f4; border: 1px solid #d7dbe0; }
+.ocr-badge.manual { color: #285286; background: #edf5ff; border: 1px solid #c8ddf5; }
+.ocr-source { color: var(--muted); font-size: 11px; }
+.ocr-alt-btn { border: 1px solid #c1a23d; background: #fffaf0; color: #624d08; border-radius: 7px; padding: 4px 7px; font-size: 11px; font-weight: 750; }
+.ocr-alt-btn:hover { background: #fff2c7; }
+.row-review td { background: #fffdf5; }
+.row-review .id-editor { border-color: #d2ae37; box-shadow: 0 0 0 2px rgba(210, 174, 55, .11); }

@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.149/build/pdf.min.mjs';
-import { parseReportText, parseTimeToSeconds, formatTime } from './parser.js';
+import { parseReportText, parseQuestionColumnText, reconcileQuestionIds, parseTimeToSeconds, formatTime } from './parser.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.149/build/pdf.worker.min.mjs';
 
@@ -30,6 +30,7 @@ const el = {
   selectionCount: $('#selectionCount'),
   verificationBody: $('#verificationBody'),
   ocrText: $('#ocrText'),
+  questionOcrText: $('#questionOcrText'),
 };
 
 const state = {
@@ -37,6 +38,8 @@ const state = {
   detectedTotalSeconds: null,
   detectedScore: null,
   rawText: '',
+  questionOcrText: '',
+  ocrDisagreements: 0,
   chart: null,
 };
 
@@ -73,7 +76,7 @@ async function renderSummaryPage(file) {
   const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
   const page = await pdf.getPage(1);
 
-  setProgress(18, 'Rendering summary page…');
+  setProgress(17, 'Rendering summary page…');
   const scale = 2.8;
   const viewport = page.getViewport({ scale });
   const pageCanvas = document.createElement('canvas');
@@ -85,38 +88,106 @@ async function renderSummaryPage(file) {
   await page.render({ canvasContext: ctx, viewport }).promise;
 
   // GMAT timed-practice PDFs place the summary table in the upper portion of page 1.
-  // Cropping makes browser OCR both faster and more accurate.
-  const cropCanvas = document.createElement('canvas');
-  cropCanvas.width = pageCanvas.width;
-  cropCanvas.height = Math.floor(pageCanvas.height * 0.70);
-  const cropCtx = cropCanvas.getContext('2d', { alpha: false });
-  cropCtx.fillStyle = '#ffffff';
-  cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
-  cropCtx.drawImage(
+  const summaryCanvas = document.createElement('canvas');
+  summaryCanvas.width = pageCanvas.width;
+  summaryCanvas.height = Math.floor(pageCanvas.height * 0.70);
+  const summaryCtx = summaryCanvas.getContext('2d', { alpha: false });
+  summaryCtx.fillStyle = '#ffffff';
+  summaryCtx.fillRect(0, 0, summaryCanvas.width, summaryCanvas.height);
+  summaryCtx.drawImage(
     pageCanvas,
-    0, 0, cropCanvas.width, cropCanvas.height,
-    0, 0, cropCanvas.width, cropCanvas.height,
+    0, 0, summaryCanvas.width, summaryCanvas.height,
+    0, 0, summaryCanvas.width, summaryCanvas.height,
   );
 
-  return cropCanvas;
+  // Second OCR pass: tightly crop the Question column, enlarge it, and remove
+  // the alternating gray row background. No character whitelist is used, so
+  // IDs containing letters, numbers, dashes, or other punctuation are allowed.
+  const sourceX = Math.floor(pageCanvas.width * 0.10);
+  const sourceY = Math.floor(pageCanvas.height * 0.105);
+  const sourceW = Math.floor(pageCanvas.width * 0.155);
+  const sourceH = Math.floor(pageCanvas.height * 0.515);
+  const upscale = 2;
+
+  const questionCanvas = document.createElement('canvas');
+  questionCanvas.width = sourceW * upscale;
+  questionCanvas.height = sourceH * upscale;
+  const questionCtx = questionCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
+  questionCtx.fillStyle = '#ffffff';
+  questionCtx.fillRect(0, 0, questionCanvas.width, questionCanvas.height);
+  questionCtx.imageSmoothingEnabled = true;
+  questionCtx.drawImage(
+    pageCanvas,
+    sourceX, sourceY, sourceW, sourceH,
+    0, 0, questionCanvas.width, questionCanvas.height,
+  );
+
+  const image = questionCtx.getImageData(0, 0, questionCanvas.width, questionCanvas.height);
+  for (let i = 0; i < image.data.length; i += 4) {
+    const r = image.data[i];
+    const g = image.data[i + 1];
+    const b = image.data[i + 2];
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    const value = luminance < 210 ? 0 : 255;
+    image.data[i] = value;
+    image.data[i + 1] = value;
+    image.data[i + 2] = value;
+    image.data[i + 3] = 255;
+  }
+  questionCtx.putImageData(image, 0, 0);
+
+  return { summaryCanvas, questionCanvas };
 }
 
-async function runOcr(canvas) {
-  setProgress(26, 'Loading OCR engine…');
+async function runOcrPasses(summaryCanvas, questionCanvas) {
+  setProgress(24, 'Loading OCR engine…');
+  let phase = 'summary';
   const worker = await Tesseract.createWorker('eng', 1, {
     logger: (message) => {
-      if (message.status === 'recognizing text') {
-        const pct = 30 + Math.round((message.progress || 0) * 62);
-        setProgress(pct, `Reading summary table… ${Math.round((message.progress || 0) * 100)}%`);
+      if (message.status !== 'recognizing text') return;
+      const progress = message.progress || 0;
+      if (phase === 'summary') {
+        const pct = 28 + Math.round(progress * 45);
+        setProgress(pct, `Reading summary table… ${Math.round(progress * 100)}%`);
+      } else {
+        const pct = 75 + Math.round(progress * 18);
+        setProgress(pct, `Cross-checking Question IDs… ${Math.round(progress * 100)}%`);
       }
     },
   });
 
   try {
+    // Keep the primary pass identical to v1.0. It was already parsing the
+    // GMAT summary table reliably, so do not force a page-segmentation mode.
     await worker.setParameters({
       preserve_interword_spaces: '1',
     });
-    const result = await worker.recognize(canvas);
+    const summaryResult = await worker.recognize(summaryCanvas);
+
+    phase = 'question';
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+      tessedit_pageseg_mode: '6',
+    });
+    const questionResult = await worker.recognize(questionCanvas);
+
+    return {
+      summaryText: summaryResult.data.text,
+      questionText: questionResult.data.text,
+    };
+  } finally {
+    await worker.terminate();
+  }
+}
+async function retrySummaryOcr(summaryCanvas) {
+  setProgress(94, 'Retrying summary-table layout…');
+  const worker = await Tesseract.createWorker('eng', 1);
+  try {
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+      tessedit_pageseg_mode: '6',
+    });
+    const result = await worker.recognize(summaryCanvas);
     return result.data.text;
   } finally {
     await worker.terminate();
@@ -132,21 +203,43 @@ async function analyzePdf() {
   el.resultsArea.hidden = true;
 
   try {
-    const canvas = await renderSummaryPage(file);
-    const text = await runOcr(canvas);
-    setProgress(95, 'Parsing question data…');
+    const { summaryCanvas, questionCanvas } = await renderSummaryPage(file);
+    const { summaryText, questionText } = await runOcrPasses(summaryCanvas, questionCanvas);
+    setProgress(95, 'Parsing and cross-checking question data…');
 
-    const parsed = parseReportText(text);
-    if (!parsed.questions.length) {
-      throw new Error('I could not find question rows on the first page. Open “Show raw OCR text” after a successful parse, or try another GMAT results PDF.');
+    let parsed = parseReportText(summaryText);
+
+    // If the normal v1-style pass fails (or clearly misses rows), retry once
+    // with a single-block layout. This mode reads the sample GMAT table as
+    // complete rows and is only invoked as a fallback, so normal runs stay fast.
+    const primaryLooksIncomplete = !parsed.questions.length
+      || (parsed.detectedScore && parsed.questions.length !== parsed.detectedScore.total);
+    if (primaryLooksIncomplete) {
+      const retryText = await retrySummaryOcr(summaryCanvas);
+      const retryParsed = parseReportText(retryText);
+      const retryIsBetter = retryParsed.questions.length > parsed.questions.length
+        || (retryParsed.detectedScore
+          && retryParsed.questions.length === retryParsed.detectedScore.total
+          && parsed.questions.length !== parsed.detectedScore?.total);
+      if (retryIsBetter) parsed = retryParsed;
     }
 
-    state.questions = parsed.questions;
+    if (!parsed.questions.length) {
+      throw new Error('I could not find question rows on the first page. The app retried the summary layout automatically but still could not parse this report.');
+    }
+
+    const targeted = parseQuestionColumnText(questionText);
+    const reconciled = reconcileQuestionIds(parsed.questions, targeted.ids);
+
+    state.questions = reconciled.questions;
     state.detectedTotalSeconds = parsed.detectedTotalSeconds;
     state.detectedScore = parsed.detectedScore;
     state.rawText = parsed.text;
+    state.questionOcrText = targeted.text;
+    state.ocrDisagreements = reconciled.disagreements;
 
     el.ocrText.textContent = parsed.text;
+    el.questionOcrText.textContent = targeted.text;
     el.timingMode.value = 'auto';
     renderVerificationTable();
     refreshEverything();
@@ -154,10 +247,14 @@ async function analyzePdf() {
 
     setProgress(100, 'Done');
     const baseMessage = `Found ${state.questions.length} questions${state.detectedTotalSeconds ? ` and detected ${formatTotalTime(state.detectedTotalSeconds)} total time` : ''}.`;
-    if (parsed.warnings.length) {
-      showStatus(`${baseMessage} Please verify the table: ${parsed.warnings.join(' ')}`, 'warning');
+    const allWarnings = [...parsed.warnings, ...reconciled.warnings];
+    if (state.ocrDisagreements) {
+      allWarnings.push(`${state.ocrDisagreements} Question ID${state.ocrDisagreements === 1 ? '' : 's'} differed between the two OCR passes and ${state.ocrDisagreements === 1 ? 'is' : 'are'} highlighted below.`);
+    }
+    if (allWarnings.length) {
+      showStatus(`${baseMessage} ${allWarnings.join(' ')}`, 'warning');
     } else {
-      showStatus(`${baseMessage} OCR checks match the report summary.`, 'success');
+      showStatus(`${baseMessage} Both OCR passes agree on every Question ID.`, 'success');
     }
 
     setTimeout(hideProgress, 450);
@@ -176,10 +273,12 @@ function renderVerificationTable() {
 
   state.questions.forEach((question, index) => {
     const row = document.createElement('tr');
-    row.className = question.result === 'Correct' ? 'row-correct' : 'row-incorrect';
+    row.className = `${question.result === 'Correct' ? 'row-correct' : 'row-incorrect'}${question.ocrCheck?.status === 'review' ? ' row-review' : ''}`;
+    const ocrCheckHtml = buildOcrCheckHtml(question, index);
     row.innerHTML = `
       <td>${index + 1}</td>
       <td class="id-cell"><input class="table-input id-editor" value="${escapeHtml(question.id)}" aria-label="Question ${index + 1} ID" /></td>
+      <td class="ocr-check-cell">${ocrCheckHtml}</td>
       <td class="result-cell">
         <select class="table-select result-editor" aria-label="Question ${index + 1} result">
           <option value="Correct" ${question.result === 'Correct' ? 'selected' : ''}>Correct</option>
@@ -196,12 +295,19 @@ function renderVerificationTable() {
     idEditor.addEventListener('change', () => {
       question.id = idEditor.value.trim().toUpperCase();
       idEditor.value = question.id;
+      if (question.ocrCheck) {
+        question.ocrCheck.status = 'single';
+        question.ocrCheck.alternateId = null;
+        question.ocrCheck.selectedSource = 'manual';
+        row.classList.remove('row-review');
+        row.querySelector('.ocr-check-cell').innerHTML = '<span class="ocr-badge manual">Edited</span>';
+      }
       refreshEverything();
     });
 
     resultEditor.addEventListener('change', () => {
       question.result = resultEditor.value;
-      row.className = question.result === 'Correct' ? 'row-correct' : 'row-incorrect';
+      row.className = `${question.result === 'Correct' ? 'row-correct' : 'row-incorrect'}${question.ocrCheck?.status === 'review' ? ' row-review' : ''}`;
       refreshEverything();
     });
 
@@ -219,7 +325,44 @@ function renderVerificationTable() {
       refreshEverything();
     });
 
+    attachOcrSuggestionHandler(row, question);
     el.verificationBody.appendChild(row);
+  });
+}
+
+function buildOcrCheckHtml(question, index) {
+  const check = question.ocrCheck;
+  if (!check || check.status === 'single') {
+    return '<span class="ocr-badge single">Single pass</span>';
+  }
+  if (check.status === 'match') {
+    return '<span class="ocr-badge match">✓ Match</span>';
+  }
+
+  const sourceLabel = check.selectedSource === 'targeted' ? 'Targeted read selected' : 'Full-page read selected';
+  return `
+    <div class="ocr-review-wrap">
+      <span class="ocr-badge review">Review</span>
+      <span class="ocr-source">${escapeHtml(sourceLabel)}</span>
+      <button class="ocr-alt-btn" type="button" data-row="${index}" title="Use the other OCR reading">Use ${escapeHtml(check.alternateId)}</button>
+    </div>
+  `;
+}
+
+function attachOcrSuggestionHandler(row, question) {
+  const button = row.querySelector('.ocr-alt-btn');
+  if (!button || !question.ocrCheck?.alternateId) return;
+  button.addEventListener('click', () => {
+    const currentId = question.id;
+    question.id = question.ocrCheck.alternateId;
+    question.ocrCheck.alternateId = currentId;
+    question.ocrCheck.selectedSource = question.ocrCheck.selectedSource === 'targeted' ? 'full' : 'targeted';
+
+    row.querySelector('.id-editor').value = question.id;
+    const cell = row.querySelector('.ocr-check-cell');
+    cell.innerHTML = buildOcrCheckHtml(question, question.number - 1);
+    attachOcrSuggestionHandler(row, question);
+    refreshEverything();
   });
 }
 
