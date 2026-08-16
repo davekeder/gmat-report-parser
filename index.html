@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Extract GMAT practice question IDs and visualize pacing from a GMAT timed practice PDF." />
+  <title>GMAT Practice Report Parser</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">GMAT practice utility</p>
+        <h1>Practice Report Parser</h1>
+        <p class="subtitle">Extract question IDs, filter review problems, and visualize pacing from a timed-practice PDF.</p>
+      </div>
+      <div class="privacy-pill" title="The PDF is rendered and OCR'd in this browser tab.">PDF stays in your browser</div>
+    </header>
+
+    <section class="panel upload-panel" aria-labelledby="upload-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="upload-heading">1. Analyze a report</h2>
+          <p>Select the GMAT timed-practice results PDF. Only the summary page is analyzed.</p>
+        </div>
+      </div>
+
+      <div class="upload-row">
+        <label class="file-picker">
+          <span>Choose PDF</span>
+          <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+        </label>
+        <div id="fileName" class="file-name">No file selected</div>
+        <button id="analyzeBtn" class="primary-btn" type="button" disabled>Analyze PDF</button>
+      </div>
+
+      <div id="progressWrap" class="progress-wrap" hidden>
+        <div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div>
+        <div id="progressText" class="progress-text">Preparing…</div>
+      </div>
+
+      <div id="statusBox" class="status-box" role="status" hidden></div>
+    </section>
+
+    <section id="resultsArea" class="results-area" hidden>
+      <section class="panel" aria-labelledby="summary-heading">
+        <div class="section-heading summary-heading-row">
+          <div>
+            <h2 id="summary-heading">2. Report summary</h2>
+            <p>Timing is detected from the PDF. Override it here for accommodated practice.</p>
+          </div>
+          <label class="timing-control">
+            <span>Timing</span>
+            <select id="timingMode">
+              <option value="auto">Auto-detect</option>
+              <option value="2700">Standard — 45:00</option>
+              <option value="4050">1.5× — 67:30</option>
+              <option value="5400">Double — 90:00</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-card"><span class="stat-label">Correct</span><strong id="correctStat">—</strong></div>
+          <div class="stat-card"><span class="stat-label">Questions</span><strong id="questionStat">—</strong></div>
+          <div class="stat-card"><span class="stat-label">Total time</span><strong id="totalTimeStat">—</strong></div>
+          <div class="stat-card"><span class="stat-label">Average pace</span><strong id="paceStat">—</strong></div>
+        </div>
+      </section>
+
+      <section class="panel chart-panel" aria-labelledby="chart-heading">
+        <div class="section-heading chart-heading-row">
+          <div>
+            <h2 id="chart-heading">3. Pacing</h2>
+            <p>Response time by question. The dotted horizontal line is the available average pace.</p>
+          </div>
+          <button id="saveChartBtn" class="secondary-btn" type="button">Save chart PNG</button>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="pacingChart" aria-label="Response time by question" role="img"></canvas>
+        </div>
+        <div class="chart-legend" aria-hidden="true">
+          <span><i class="legend-dot correct-dot">✓</i>Correctly Answered</span>
+          <span><i class="legend-dot incorrect-dot">×</i>Incorrectly Answered</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="filter-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="filter-heading">4. Build problem ID string</h2>
+            <p>The output uses the exact Question IDs shown in the verification table below.</p>
+          </div>
+        </div>
+
+        <div class="filter-box">
+          <label class="radio-line">
+            <input type="radio" name="filterMode" value="all" checked />
+            <span>All problems</span>
+          </label>
+
+          <label class="radio-line">
+            <input type="radio" name="filterMode" value="selected" />
+            <span>Selected problems</span>
+          </label>
+
+          <div id="selectedFilters" class="selected-filters is-disabled">
+            <label class="check-line">
+              <input id="includeIncorrect" type="checkbox" checked />
+              <span>Incorrect problems</span>
+            </label>
+            <label class="check-line slow-line">
+              <input id="includeSlowCorrect" type="checkbox" checked />
+              <span>Correct problems with time ≥</span>
+              <input id="cutoffTime" class="time-input" type="text" inputmode="numeric" value="2:30" aria-label="Time cutoff in minutes and seconds" />
+              <span class="time-hint">m:ss</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="output-row">
+          <textarea id="idOutput" rows="3" readonly aria-label="Selected problem IDs"></textarea>
+          <div class="output-actions">
+            <div id="selectionCount" class="selection-count">0 problems</div>
+            <button id="copyBtn" class="primary-btn" type="button">Copy IDs</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="verify-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="verify-heading">5. Verify extracted data</h2>
+            <p>OCR is usually accurate, but question IDs, result, and time can be edited if needed.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Question</th><th>Result</th><th>Time</th></tr>
+            </thead>
+            <tbody id="verificationBody"></tbody>
+          </table>
+        </div>
+        <details class="ocr-details">
+          <summary>Show raw OCR text</summary>
+          <pre id="ocrText"></pre>
+        </details>
+      </section>
+    </section>
+
+    <footer>
+      <p>Runs locally in your browser. External libraries are loaded from public CDNs; the selected PDF itself is not uploaded by this app.</p>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
