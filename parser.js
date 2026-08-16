@@ -27,10 +27,16 @@ function normalizeOcrPunctuation(value) {
 }
 
 function normalizeQuestionId(value) {
-  return normalizeOcrPunctuation(value)
+  const id = normalizeOcrPunctuation(value)
     .replace(/^[-|:;,.\s]+/, '')
     .replace(/[-|:;,.\s]+$/, '')
     .toUpperCase();
+
+  // GMAT DI IDs use a GI prefix (for example GI001687). Tesseract can read
+  // the capital I as a lowercase l; uppercasing then turns that into GL.
+  // Correct only this known leading-prefix confusion so other letters and
+  // punctuation in Question IDs remain untouched.
+  return id.replace(/^GL/, 'GI');
 }
 
 function repairCommonPsNumericId(value) {
@@ -49,11 +55,20 @@ function repairCommonPsNumericId(value) {
 function extractStructuredQuestionId(line) {
   // The summary table is laid out as:
   // # | Question | Difficulty | Result | Your answer | Correct | Time
-  // Capturing everything between the row number and Difficulty supports IDs
-  // containing letters, digits, dashes, underscores, periods, and other text.
-  const match = line.match(/^\s*\d{1,3}\s+(.+?)\s+(easy|medium|hard)\s+(?:Incorrect|Correct)\b/i);
+  //
+  // Do NOT require the leading row number to OCR correctly. On some reports
+  // Tesseract can read a row number such as 3 as "Z" even while reading the
+  // Question ID, Result, and Time perfectly. The Question ID is the final token
+  // immediately before the Difficulty column, so use that stable landmark.
+  // IDs may contain letters, digits, dashes, underscores, periods, etc.
+  const match = line.match(/^\s*(.*?)\s+(easy|medium|hard)\s+(?:Incorrect|Correct)\b/i);
   if (!match) return null;
-  return repairCommonPsNumericId(match[1]);
+
+  const prefix = normalizeOcrPunctuation(match[1]);
+  const tokens = prefix.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+
+  return repairCommonPsNumericId(tokens.at(-1));
 }
 
 function extractQuestionIdFallback(line) {
